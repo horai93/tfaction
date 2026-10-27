@@ -19,6 +19,7 @@
     "@aws-sdk/client-secrets-manager": "3.1156.0",
     "@csm-actions/securefix-action": "npm:@jsr/csm-actions__securefix-action@^0.2.0",
     "@csm-actions/update-branch-action": "npm:@jsr/csm-actions__update-branch-action@^0.1.0",
+    "@google-cloud/storage": "8.4.0",
     "@marcbachmann/cel-js": "^8.0.0",
     "@octokit/auth-app": "^8.3.1",
     "@octokit/core": "^7.0.0",

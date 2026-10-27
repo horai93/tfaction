@@ -18,4 +18,4 @@ Without a plan file, there is a risk that terraform apply produces different res
 tfaction uploads the plan file to GitHub Artifacts and downloads it during terraform apply.
 Since GitHub Artifacts is used, there is no dependency on S3, GCS, or other external storage. Additionally, uploaded plan files cannot be tampered with after the fact, making this approach secure.
 
-If you want to avoid exposing plan files through GitHub Artifacts, you can instead [store them in S3 with access control](plan-file-s3.md).
+If you want to avoid exposing plan files through GitHub Artifacts, you can instead store them in [S3](plan-file-s3.md) or [GCS](plan-file-gcs.md) and restrict access with bucket IAM.

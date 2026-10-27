@@ -113,6 +113,9 @@ vi.mock("../../lib/plan_storage", async () => {
     downloadPlanFromS3: vi
       .fn()
       .mockResolvedValue("/tmp/tfaction-test/plan.out"),
+    downloadPlanFromGCS: vi
+      .fn()
+      .mockResolvedValue("/tmp/tfaction-test/plan.out"),
     sha256File: vi.fn().mockReturnValue("hash-abc"),
   };
 });
@@ -616,6 +619,73 @@ describe("main", () => {
     });
 
     await expect(main()).rejects.toThrow("plan file hash mismatch");
+  });
+
+  it("uses the GCS location from metadata, independently of apply config", async () => {
+    const { mockExecutor } = await setupMainMocks({
+      meta: {
+        storage: "gcs",
+        bucket: "plan-time-bucket",
+        files: [
+          { key: "old-prefix/1001/2/gcp/dev/plan.out", hash: "hash-abc" },
+        ],
+        summary: "create",
+      },
+    });
+    await main();
+    const storage = await import("../../lib/plan_storage");
+    expect(storage.downloadPlanFromGCS).toHaveBeenCalledWith(
+      "plan-time-bucket",
+      "old-prefix/1001/2/gcp/dev/plan.out",
+      expect.any(String),
+    );
+    expect(storage.downloadPlanFromS3).not.toHaveBeenCalled();
+    expect(mockExecutor.exec).toHaveBeenCalledWith(
+      "terraform",
+      expect.arrayContaining(["apply", "/tmp/tfaction-test/plan.out"]),
+      expect.anything(),
+    );
+  });
+
+  it.each([
+    "hash mismatch",
+    "download failure",
+    "missing bucket",
+    "missing file",
+  ])("does not apply an invalid GCS plan: %s", async (failure) => {
+    const { mockExecutor } = await setupMainMocks({
+      meta: {
+        storage: "gcs",
+        bucket: failure === "missing bucket" ? undefined : "gcs-plans",
+        files:
+          failure === "missing file"
+            ? []
+            : [
+                {
+                  key: "plans/plan.out",
+                  hash: failure === "hash mismatch" ? "wrong-hash" : "hash-abc",
+                },
+              ],
+        summary: "create",
+      },
+    });
+    const storage = await import("../../lib/plan_storage");
+    if (failure === "download failure")
+      vi.mocked(storage.downloadPlanFromGCS).mockRejectedValueOnce(
+        new Error("permission denied"),
+      );
+    const expectedError = {
+      "hash mismatch": "plan file hash mismatch",
+      "download failure": "permission denied",
+      "missing bucket": "bucket is missing",
+      "missing file": "plan file entry is missing",
+    }[failure];
+    await expect(main()).rejects.toThrow(expectedError);
+    expect(mockExecutor.exec).not.toHaveBeenCalledWith(
+      "terraform",
+      expect.arrayContaining(["apply"]),
+      expect.anything(),
+    );
   });
 
   it("falls back to GitHub Artifacts when no metadata artifact exists", async () => {

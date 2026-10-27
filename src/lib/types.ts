@@ -119,13 +119,30 @@ const AvailableProvider = z.object({
 });
 export type AvailableProvider = z.infer<typeof AvailableProvider>;
 
-// Store the plan file in S3 with access control instead of GitHub Artifacts.
+// Store the plan file in object storage instead of GitHub Artifacts.
 // The object key becomes `<key_prefix><run id>/<attempt>/<target>/plan.out`.
-const PlanFileS3 = z.object({
+const PlanFileStorage = z.object({
   bucket: z.string(),
   key_prefix: z.string().optional(),
 });
-export type PlanFileS3 = z.infer<typeof PlanFileS3>;
+export type PlanFileS3 = z.infer<typeof PlanFileStorage>;
+export type PlanFileGCS = z.infer<typeof PlanFileStorage>;
+
+const hasSinglePlanFileStorage = (config: {
+  plan_file_s3?: PlanFileS3;
+  plan_file_gcs?: PlanFileGCS;
+}): boolean => !(config.plan_file_s3 && config.plan_file_gcs);
+
+const planFileStorageCheck = {
+  error:
+    "plan_file_s3 and plan_file_gcs cannot be set at the same configuration level",
+  path: ["plan_file_gcs"],
+};
+
+// Custom refinements need an explicit equivalent in generated JSON Schema.
+const planFileStorageMetadata = {
+  not: { required: ["plan_file_s3", "plan_file_gcs"] },
+};
 
 // Don't dismiss approvals if the plan result is the same as the previous plan.
 // Enabled by default.
@@ -138,7 +155,7 @@ const SkipDismissIfUnchanged = z.object({
 });
 export type SkipDismissIfUnchanged = z.infer<typeof SkipDismissIfUnchanged>;
 
-const TargetGroup = z.object({
+const TargetGroupSchema = z.object({
   aws_region: z.string().optional(),
   aws_assume_role_arn: z.string().optional(),
   aws_role_session_name: z.string().optional(),
@@ -168,11 +185,17 @@ const TargetGroup = z.object({
     })
     .optional(),
   available_providers: AvailableProvider.array().optional(),
-  plan_file_s3: PlanFileS3.optional(),
+  plan_file_s3: PlanFileStorage.optional(),
+  plan_file_gcs: PlanFileStorage.optional(),
 });
+
+const TargetGroup = TargetGroupSchema.refine(
+  hasSinglePlanFileStorage,
+  planFileStorageCheck,
+).meta(planFileStorageMetadata);
 export type TargetGroup = z.infer<typeof TargetGroup>;
 
-export const TargetConfig = z.object({
+const TargetConfigSchema = z.object({
   aws_assume_role_arn: z.string().optional(),
   aws_region: z.string().optional(),
   destroy: z.boolean().optional(),
@@ -195,8 +218,14 @@ export const TargetConfig = z.object({
   terraform_command: z.string().optional(),
   terraform_docs: TerraformDocsConfig.optional(),
   conftest: ConftestConfig.optional(),
-  plan_file_s3: PlanFileS3.optional(),
+  plan_file_s3: PlanFileStorage.optional(),
+  plan_file_gcs: PlanFileStorage.optional(),
 });
+
+export const TargetConfig = TargetConfigSchema.refine(
+  hasSinglePlanFileStorage,
+  planFileStorageCheck,
+).meta(planFileStorageMetadata);
 export type TargetConfig = z.infer<typeof TargetConfig>;
 
 const labelPrefixesDefaults = {
@@ -227,7 +256,7 @@ const TargetLabelRule = z.object({
 });
 export type TargetLabelRule = z.infer<typeof TargetLabelRule>;
 
-export const RawConfig = z.object({
+const RawConfigSchema = z.object({
   aqua: z
     .object({
       update_checksum: z
@@ -253,7 +282,8 @@ export const RawConfig = z.object({
   env: z.record(z.string(), z.string()).optional(),
   label_prefixes: LabelPrefixes.default(labelPrefixesDefaults),
   plan_workflow_name: z.string(),
-  plan_file_s3: PlanFileS3.optional(),
+  plan_file_s3: PlanFileStorage.optional(),
+  plan_file_gcs: PlanFileStorage.optional(),
   auto_apps: z
     .object({
       logins: z.string().array().default(["renovate[bot]", "dependabot[bot]"]),
@@ -367,6 +397,11 @@ export const RawConfig = z.object({
     })
     .optional(),
 });
+
+export const RawConfig = RawConfigSchema.refine(
+  hasSinglePlanFileStorage,
+  planFileStorageCheck,
+).meta(planFileStorageMetadata);
 export type RawConfig = z.infer<typeof RawConfig>;
 
 // ParsedConfig is the type after zod parsing with defaults applied

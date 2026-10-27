@@ -18,6 +18,10 @@ import { post } from "../../comment";
 import * as planStorage from "../../lib/plan_storage";
 import { computePlanHash } from "../../lib/plan_hash";
 
+const { uploadArtifact } = vi.hoisted(() => ({
+  uploadArtifact: vi.fn().mockResolvedValue({}),
+}));
+
 // Mock modules
 vi.mock("@actions/core", () => ({
   setOutput: vi.fn(),
@@ -39,7 +43,7 @@ vi.mock("@actions/github", () => ({
 
 vi.mock("@actions/artifact", () => ({
   DefaultArtifactClient: class MockArtifactClient {
-    uploadArtifact = vi.fn().mockResolvedValue({});
+    uploadArtifact = uploadArtifact;
   },
 }));
 
@@ -96,6 +100,12 @@ vi.mock("../../lib/plan_storage", async () => {
       key: "tfaction_plan/1/1/aws/test/dev/plan.out",
       hash: "hash-xyz",
     }),
+    uploadPlanToGCS: vi
+      .fn()
+      .mockResolvedValue({
+        key: "tfaction_plan/1/1/gcp/dev/plan.out",
+        hash: "hash-gcs",
+      }),
     downloadPreviousPlanMeta: vi.fn(),
   };
 });
@@ -517,6 +527,49 @@ describe("runTerraformPlan", () => {
       expect.stringContaining("plan_meta.json"),
       expect.stringContaining('"storage":"s3"'),
     );
+  });
+
+  it("uploads only metadata to Artifacts in GCS mode", async () => {
+    await runTerraformPlan({
+      ...createBaseInputs(mockExecutor),
+      planFileGCS: { bucket: "gcs-plans", key_prefix: "custom/" },
+    });
+    expect(planStorage.uploadPlanToGCS).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bucket: "gcs-plans",
+        keyPrefix: "custom/",
+        target: "aws/test/dev",
+      }),
+      path.join(tempDir, "tfplan.binary"),
+    );
+    expect(planStorage.uploadPlanToS3).not.toHaveBeenCalled();
+    expect(uploadArtifact).toHaveBeenCalledTimes(1);
+    expect(uploadArtifact).toHaveBeenCalledWith(
+      "terraform_plan_meta_aws__test__dev",
+      [path.join(tempDir, "plan_meta.json")],
+      tempDir,
+    );
+    const metadata = vi
+      .mocked(fs.writeFileSync)
+      .mock.calls.find(([name]) => String(name).endsWith("plan_meta.json"));
+    expect(JSON.parse(String(metadata?.[1]))).toMatchObject({
+      storage: "gcs",
+      bucket: "gcs-plans",
+      files: [{ key: "tfaction_plan/1/1/gcp/dev/plan.out", hash: "hash-gcs" }],
+    });
+  });
+
+  it("does not publish metadata or fall back to Artifacts when GCS upload fails", async () => {
+    vi.mocked(planStorage.uploadPlanToGCS).mockRejectedValueOnce(
+      new Error("permission denied"),
+    );
+    await expect(
+      runTerraformPlan({
+        ...createBaseInputs(mockExecutor),
+        planFileGCS: { bucket: "gcs-plans" },
+      }),
+    ).rejects.toThrow("permission denied");
+    expect(uploadArtifact).not.toHaveBeenCalled();
   });
 
   it("calls dismissApprovalReviews when enabled with PR number", async () => {

@@ -5,7 +5,7 @@ sidebar_position: 3550
 # Store Plan Files in S3
 
 :::info
-This feature targets AWS. Google Cloud support may be added later.
+This feature targets AWS. For Google Cloud, see [Store Plan Files in GCS](plan-file-gcs.md).
 It applies only to the `terraform` job type (`tfmigrate` does not use a plan-file artifact).
 :::
 

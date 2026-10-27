@@ -72,6 +72,7 @@ type Inputs = {
   secrets?: Record<string, string>;
   stepSummaryPath?: string;
   planFileS3?: types.PlanFileS3;
+  planFileGCS?: types.PlanFileGCS;
 };
 
 export type RunInputs = {
@@ -656,7 +657,7 @@ export const runTerraformPlan = async (
   core.setOutput("plan_json", tempPlanJson);
 
   // Upload the plan file and a self-describing metadata file.
-  // When plan_file_s3 is set, the plan file is stored in S3 (only the metadata
+  // When external storage is set, the plan file is stored there (only the metadata
   // file goes to GitHub Artifacts); otherwise the plan file is uploaded to
   // GitHub Artifacts as before. Restricting access to the bucket is the user's
   // responsibility (see the plan-file-s3 docs). The metadata file records where
@@ -667,11 +668,16 @@ export const runTerraformPlan = async (
   const metaPath = path.join(tempDir, planStorage.metaFileName);
 
   let meta: planStorage.PlanMeta;
-  if (inputs.planFileS3) {
-    const planFile = await planStorage.uploadPlanToS3(
+  const planFileConfig = inputs.planFileS3 ?? inputs.planFileGCS;
+  if (planFileConfig) {
+    const storage = inputs.planFileS3 ? "s3" : "gcs";
+    const upload = inputs.planFileS3
+      ? planStorage.uploadPlanToS3
+      : planStorage.uploadPlanToGCS;
+    const planFile = await upload(
       {
-        bucket: inputs.planFileS3.bucket,
-        keyPrefix: inputs.planFileS3.key_prefix,
+        bucket: planFileConfig.bucket,
+        keyPrefix: planFileConfig.key_prefix,
         runId: env.all.GITHUB_RUN_ID,
         attempt: env.all.GITHUB_RUN_ATTEMPT,
         target: inputs.target,
@@ -679,8 +685,8 @@ export const runTerraformPlan = async (
       tempPlanBinary,
     );
     meta = {
-      storage: "s3",
-      bucket: inputs.planFileS3.bucket,
+      storage,
+      bucket: planFileConfig.bucket,
       files: [planFile],
       summary,
       plan_hash: planHash,
@@ -777,6 +783,7 @@ export const main = async (
     secrets: runInputs.secrets,
     stepSummaryPath: runInputs.stepSummaryPath,
     planFileS3: targetConfig.plan_file_s3,
+    planFileGCS: targetConfig.plan_file_gcs,
   };
 
   const jobType = runInputs.jobType;

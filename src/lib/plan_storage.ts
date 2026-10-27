@@ -1,4 +1,4 @@
-// plan_storage.ts: Store the Terraform plan file in S3 with access control
+// plan_storage.ts: Store the Terraform plan file in S3 or GCS
 // instead of GitHub Artifacts, and describe where it is stored via a small
 // metadata file (uploaded to GitHub Artifacts) that apply and plan-label read.
 
@@ -6,6 +6,7 @@ import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { z } from "zod";
+import { Storage } from "@google-cloud/storage";
 import { DefaultArtifactClient } from "@actions/artifact";
 import type * as github from "@actions/github";
 import {
@@ -14,7 +15,7 @@ import {
   GetObjectCommand,
 } from "@aws-sdk/client-s3";
 
-// File name of the plan binary stored in S3.
+// File name of the plan binary stored in object storage.
 const planFileName = "plan.out";
 
 // Local file name of the metadata file inside its artifact.
@@ -27,7 +28,7 @@ export const metaArtifactName = (target: string): string =>
 // Prefix of the metadata artifact name, used to filter artifacts.
 export const metaArtifactNamePrefix = "terraform_plan_meta_";
 
-// A file stored in S3: its full object key and its SHA-256 (for tamper
+// A file stored in object storage: its full object key and its SHA-256 (for tamper
 // detection). The plan binary is identified by the key's basename (plan.out),
 // so more files can be added later without a discriminator field.
 const PlanFile = z.object({
@@ -42,7 +43,7 @@ export type PlanFile = z.infer<typeof PlanFile>;
 // result (for skipping dismissing approvals if the plan result is unchanged).
 // All of these are non-sensitive.
 export const PlanMeta = z.object({
-  storage: z.enum(["s3", "github-artifacts"]),
+  storage: z.enum(["s3", "gcs", "github-artifacts"]),
   bucket: z.string().optional(),
   files: PlanFile.array().optional(),
   summary: z.enum(["no-op", "update", "create", "delete"]),
@@ -77,7 +78,7 @@ export const buildKeyPrefix = (
   return `${base}${runId}/${attempt}/${target}/`;
 };
 
-export type UploadPlanToS3Params = {
+export type UploadPlanParams = {
   bucket: string;
   keyPrefix?: string;
   runId: string;
@@ -87,7 +88,7 @@ export type UploadPlanToS3Params = {
 
 // Upload the plan file to S3 and return its object key and hash.
 export const uploadPlanToS3 = async (
-  params: UploadPlanToS3Params,
+  params: UploadPlanParams,
   planBinaryPath: string,
 ): Promise<PlanFile> => {
   const s3 = new S3Client({});
@@ -127,6 +128,43 @@ export const downloadPlanFromS3 = async (
   const bytes = await res.Body.transformToByteArray();
   const filePath = path.join(dest, path.basename(key));
   fs.writeFileSync(filePath, Buffer.from(bytes));
+  return filePath;
+};
+
+// Authentication is resolved by the Google client through Application Default Credentials.
+export const uploadPlanToGCS = async (
+  params: UploadPlanParams,
+  planBinaryPath: string,
+): Promise<PlanFile> => {
+  const storage = new Storage();
+  const key = `${buildKeyPrefix(params.keyPrefix, params.runId, params.attempt, params.target)}${planFileName}`;
+  try {
+    await storage.bucket(params.bucket).upload(planBinaryPath, {
+      destination: key,
+      resumable: false,
+      // Avoid replacing an existing plan, including retries after a successful upload.
+      preconditionOpts: { ifGenerationMatch: 0 },
+    });
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === 412) {
+      throw new Error(
+        `plan file already exists in GCS: gs://${params.bucket}/${key}. Rerun the workflow to use a new run attempt.`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  return { key, hash: sha256File(planBinaryPath) };
+};
+
+export const downloadPlanFromGCS = async (
+  bucket: string,
+  key: string,
+  dest: string,
+): Promise<string> => {
+  const storage = new Storage();
+  const filePath = path.join(dest, path.basename(key));
+  await storage.bucket(bucket).file(key).download({ destination: filePath });
   return filePath;
 };
 

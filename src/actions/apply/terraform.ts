@@ -434,7 +434,7 @@ const downloadPlanFile = async (): Promise<string> => {
     return downloadPlanFileFromArtifacts();
   }
 
-  // storage === "s3": pull the plan file from S3 and verify its hash.
+  // Pull the external plan file and verify it against the trusted metadata hash.
   if (!meta.bucket) {
     throw new Error("invalid plan metadata: bucket is missing");
   }
@@ -442,11 +442,11 @@ const downloadPlanFile = async (): Promise<string> => {
   if (!planFile) {
     throw new Error("invalid plan metadata: plan file entry is missing");
   }
-  const sourcePath = await planStorage.downloadPlanFromS3(
-    meta.bucket,
-    planFile.key,
-    tempDir,
-  );
+  const download =
+    meta.storage === "gcs"
+      ? planStorage.downloadPlanFromGCS
+      : planStorage.downloadPlanFromS3;
+  const sourcePath = await download(meta.bucket, planFile.key, tempDir);
   const actualHash = planStorage.sha256File(sourcePath);
   if (actualHash !== planFile.hash) {
     throw new Error(
